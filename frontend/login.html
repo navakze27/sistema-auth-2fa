@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iniciar Sesión - Sistema 2FA</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="contenedor">
+        <h2>Iniciar Sesión</h2>
+        
+        <form id="formularioLogin">
+            <div class="grupo-input">
+                <label for="identificador">Correo o Teléfono:</label>
+                <input type="text" id="identificador" required placeholder="ejemplo@correo.com o 1234567890">
+            </div>
+            
+            <div class="grupo-input">
+                <label for="password">Contraseña:</label>
+                <input type="password" id="password" required placeholder="Tu contraseña">
+            </div>
+
+            <button type="submit">Entrar</button>
+        </form>
+
+        <p style="text-align: center; margin-top: 15px; font-size: 14px;">
+            ¿No tienes cuenta? <a href="registro.html" style="color: #007bff;">Regístrate aquí</a>
+        </p>
+    </div>
+
+    <script src="login.js"></script>
+</body>
+</html>
