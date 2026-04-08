@@ -1,166 +1,107 @@
+require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
+const mysql = require('mysql2');
 const bcrypt = require('bcryptjs');
+const nodemailer = require('nodemailer');
 const speakeasy = require('speakeasy');
 const qrcode = require('qrcode');
-require('dotenv').config();
-const db = require('./db');
-const { enviarCorreo2FA } = require('./mailer'); // ¡Llamamos al cartero!
+const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
-
-app.use(cors());
 app.use(express.json());
-// Le decimos al servidor que también sirva nuestra página web
 app.use(express.static('frontend'));
 
-// Memoria temporal para guardar los códigos de correo (expiran en 5 mins)
-const codigosCorreo = new Map();
+const bot = new TelegramBot(process.env.TELEGRAM_TOKEN);
 
-// ==========================================
-// 1. REGISTRO (Simple)
-// ==========================================
+const db = mysql.createConnection({
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASS,
+    database: process.env.DB_NAME,
+    port: process.env.DB_PORT
+});
+
+db.connect(err => {
+    if (err) console.error('Error DB:', err);
+    else console.log('✅ Base de Datos Conectada');
+});
+
+// --- API: REGISTRO ---
 app.post('/api/registro', async (req, res) => {
-    try {
-        const { email, phone, password } = req.body;
-
-        if (!password || (!email && !phone)) {
-            return res.status(400).json({ error: 'Faltan datos obligatorios.' });
-        }
-
-        const salt = await bcrypt.genSalt(10);
-        const passwordHash = await bcrypt.hash(password, salt);
-
-        const query = `INSERT INTO users (email, phone, password_hash) VALUES (?, ?, ?)`;
-        await db.query(query, [email || null, phone || null, passwordHash]);
-
-        res.status(201).json({ mensaje: 'Cuenta creada exitosamente. Ya puedes iniciar sesión.' });
-
-    } catch (error) {
-        if (error.code === 'ER_DUP_ENTRY') {
-            return res.status(400).json({ error: 'El correo o teléfono ya está registrado.' });
-        }
-        res.status(500).json({ error: 'Error interno del servidor.' });
-    }
+    const { email, phone, password } = req.body;
+    const hash = await bcrypt.hash(password, 10);
+    db.query('INSERT INTO usuarios (email, telefono, password) VALUES (?, ?, ?)', 
+    [email, phone, hash], (err) => {
+        if (err) return res.status(500).json({ error: 'Usuario ya existe' });
+        res.json({ mensaje: 'Cuenta creada con éxito' });
+    });
 });
 
-// ==========================================
-// 2. LOGIN (Paso 1: Validar contraseña)
-// ==========================================
-app.post('/api/login', async (req, res) => {
-    try {
-        const { email, phone, password } = req.body;
-
-        let query = email ? 'SELECT * FROM users WHERE email = ?' : 'SELECT * FROM users WHERE phone = ?';
-        const [usuarios] = await db.query(query, [email || phone]);
-
-        if (usuarios.length === 0) return res.status(401).json({ error: 'Usuario no encontrado.' });
-
-        const usuario = usuarios[0];
-        const contrasenaValida = await bcrypt.compare(password, usuario.password_hash);
-
-        if (!contrasenaValida) return res.status(401).json({ error: 'Contraseña incorrecta.' });
-
-        // Contraseña correcta -> Le avisamos al frontend para que pregunte el método 2FA
-        res.status(200).json({
-            mensaje: 'Credenciales correctas.',
-            userId: usuario.id,
-            email: usuario.email // Se lo mandamos por si elige "Correo"
-        });
-
-    } catch (error) {
-        res.status(500).json({ error: 'Error en el login.' });
-    }
+// --- API: LOGIN ---
+app.post('/api/login', (req, res) => {
+    const { identificador, password } = req.body;
+    const query = identificador.includes('@') ? 'SELECT * FROM usuarios WHERE email = ?' : 'SELECT * FROM usuarios WHERE telefono = ?';
+    
+    db.query(query, [identificador], async (err, results) => {
+        if (err || results.length === 0) return res.status(401).json({ error: 'Usuario no encontrado' });
+        const match = await bcrypt.compare(password, results[0].password);
+        if (!match) return res.status(401).json({ error: 'Clave incorrecta' });
+        res.json({ userId: results[0].id, email: results[0].email });
+    });
 });
 
-// ==========================================
-// 3. SOLICITAR 2FA (El usuario elige Correo o App)
-// ==========================================
+// --- API: ENVIAR CÓDIGO 2FA ---
 app.post('/api/solicitar-2fa', async (req, res) => {
     const { userId, metodo, email } = req.body;
+    const codigo = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiracion = new Date(Date.now() + 5 * 60000);
 
-    try {
+    db.query('UPDATE usuarios SET codigo_2fa = ?, codigo_expiracion = ? WHERE id = ?', 
+    [codigo, expiracion, userId], async (err) => {
+        if (err) return res.status(500).json({ error: 'Error interno' });
+
         if (metodo === 'email') {
-            if (!email) return res.status(400).json({ error: 'No tienes un correo registrado para usar esta opción.' });
-            
-            // Generamos un código de 6 números (ej. 849201)
-            const codigoAleatorio = Math.floor(100000 + Math.random() * 900000).toString();
-            
-            // Guardamos en memoria con expiración de 5 minutos
-            codigosCorreo.set(userId, {
-                codigo: codigoAleatorio,
-                expira: Date.now() + 5 * 60 * 1000 
+            const transporter = nodemailer.createTransport({
+                service: 'gmail', auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
             });
-
-            // Usamos tu cartero para enviar el correo real
-            const enviado = await enviarCorreo2FA(email, codigoAleatorio);
-            
-            if (enviado) res.status(200).json({ mensaje: 'Código enviado a tu correo.' });
-            else res.status(500).json({ error: 'No se pudo enviar el correo.' });
-
-        } else if (metodo === 'app') {
-            // Buscamos si ya tiene un QR generado
-            const [usuarios] = await db.query('SELECT two_factor_secret FROM users WHERE id = ?', [userId]);
-            
-            if (usuarios[0].two_factor_secret) {
-                // Ya lo tiene configurado, solo le pedimos que abra su app
-                res.status(200).json({ mensaje: 'Abre tu app autenticadora.', requiereQR: false });
-            } else {
-                // Primera vez -> Generamos Secreto y QR
-                const secret = speakeasy.generateSecret({ name: `Acceso Seguro (${email || 'Usuario'})` });
-                await db.query('UPDATE users SET two_factor_secret = ? WHERE id = ?', [secret.base32, userId]);
-                const qrCodeUrl = await qrcode.toDataURL(secret.otpauth_url);
-                
-                res.status(200).json({ 
-                    mensaje: 'Escanea este QR en tu Google Authenticator.', 
-                    requiereQR: true, 
-                    qrUrl: qrCodeUrl,
-                    secretoManual: secret.base32
-                });
-            }
+            await transporter.sendMail({ from: process.env.EMAIL_USER, to: email, subject: '🔐 Código de Acceso', text: `Tu código: ${codigo}` });
+            res.json({ mensaje: 'Enviado a tu Gmail' });
+        } 
+        else if (metodo === 'telegram') {
+            await bot.sendMessage(process.env.TELEGRAM_CHAT_ID, `🔐 *SISTEMA EMANUEL*\n\nCódigo: \`${codigo}\``, { parse_mode: 'Markdown' });
+            res.json({ mensaje: 'Enviado a Telegram' });
         }
-    } catch (error) {
-        res.status(500).json({ error: 'Error procesando solicitud 2FA.' });
-    }
+        else if (metodo === 'app') {
+            db.query('SELECT secreto_2fa FROM usuarios WHERE id = ?', [userId], async (err, results) => {
+                let secreto = results[0].secreto_2fa;
+                if (!secreto) {
+                    const nuevo = speakeasy.generateSecret({ name: "Emanuel_Seguridad" });
+                    db.query('UPDATE usuarios SET secreto_2fa = ? WHERE id = ?', [nuevo.base32, userId]);
+                    const qr = await qrcode.toDataURL(nuevo.otpauth_url);
+                    return res.json({ requiereQR: true, qrUrl: qr, secretoManual: nuevo.base32 });
+                }
+                res.json({ requiereQR: false });
+            });
+        }
+    });
 });
 
-// ==========================================
-// 4. VERIFICAR 2FA (Paso Final)
-// ==========================================
-app.post('/api/verificar-2fa', async (req, res) => {
+// --- API: VERIFICAR CÓDIGO ---
+app.post('/api/verificar-2fa', (req, res) => {
     const { userId, token, metodo } = req.body;
-
-    try {
-        if (metodo === 'email') {
-            const dataTemporal = codigosCorreo.get(userId);
-            
-            if (!dataTemporal) return res.status(400).json({ error: 'Código no solicitado o expirado.' });
-            if (Date.now() > dataTemporal.expira) return res.status(400).json({ error: 'El código ya expiró.' });
-            if (dataTemporal.codigo !== token) return res.status(401).json({ error: 'Código incorrecto.' });
-
-            codigosCorreo.delete(userId); // Borramos el código usado
-            res.status(200).json({ mensaje: '¡Acceso concedido vía Correo!' });
-
-        } else if (metodo === 'app') {
-            const [usuarios] = await db.query('SELECT two_factor_secret FROM users WHERE id = ?', [userId]);
-            
-            const esValido = speakeasy.totp.verify({
-                secret: usuarios[0].two_factor_secret, 
-                encoding: 'base32', 
-                token: token, 
-                window: 1
-            });
-
-            if (esValido) res.status(200).json({ mensaje: '¡Acceso concedido vía App!' });
-            else res.status(401).json({ error: 'Código de app inválido.' });
-        }
-    } catch (error) {
-        res.status(500).json({ error: 'Error verificando el código.' });
+    if (metodo === 'app') {
+        db.query('SELECT secreto_2fa FROM usuarios WHERE id = ?', [userId], (err, results) => {
+            const ok = speakeasy.totp.verify({ secret: results[0].secreto_2fa, encoding: 'base32', token });
+            if (ok) res.json({ success: true });
+            else res.status(401).json({ error: 'Código de App inválido' });
+        });
+    } else {
+        db.query('SELECT codigo_2fa, codigo_expiracion FROM usuarios WHERE id = ?', [userId], (err, results) => {
+            if (token === results[0].codigo_2fa && new Date() < new Date(results[0].codigo_expiracion)) res.json({ success: true });
+            else res.status(401).json({ error: 'Código incorrecto o expirado' });
+        });
     }
 });
 
-// INICIO
-db.query('SELECT 1').then(() => {
-    console.log('✅ Base de datos conectada.');
-    app.listen(process.env.PORT || 3000, () => console.log('🚀 Servidor corriendo en puerto 3000.'));
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Servidor listo en puerto ${PORT}`));
