@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Acceso Seguro - Sistema Emanuel</title>
     <style>
-        /* Estilos base (los mismos de antes) */
+        /* Estilos base */
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         body { 
             background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); 
@@ -45,7 +45,6 @@
         }
         .btn-principal:hover { background: #152a55; }
         
-        /* Estilos nuevos para 2FA */
         .btn-secundario {
             width: 100%; padding: 12px; background: #f0f0f0; color: #333; border: 1px solid #ddd;
             border-radius: 8px; font-size: 14px; cursor: pointer; margin-top: 10px; font-weight: bold;
@@ -81,7 +80,7 @@
         <div id="vista-registro" class="formulario">
             <form id="formRegistro">
                 <div class="grupo-input">
-                    <label>Correo Electrónico (Obligatorio para opción de correo)</label>
+                    <label>Correo Electrónico</label>
                     <input type="email" id="reg-email" placeholder="ejemplo@correo.com" required>
                 </div>
                 <div class="grupo-input">
@@ -98,8 +97,7 @@
 
         <div id="vista-elegir-2fa" class="formulario" style="text-align: center;">
             <h2 style="color: #1e3c72; margin-bottom: 10px;">Protección 2FA</h2>
-            <p style="font-size: 14px; color: #666; margin-bottom: 20px;">¿Cómo deseas recibir tu código de seguridad hoy?</p>
-            
+            <p style="font-size: 14px; color: #666; margin-bottom: 20px;">¿Cómo deseas recibir tu código de seguridad?</p>
             <button class="btn-principal" onclick="solicitar2FA('app')">📱 Usar Google Authenticator</button>
             <button class="btn-secundario" onclick="solicitar2FA('email')">✉️ Enviar código por Correo</button>
         </div>
@@ -107,36 +105,28 @@
         <div id="vista-verificar" class="formulario" style="text-align: center;">
             <h2 style="color: #1e3c72; margin-bottom: 10px;">Verificación</h2>
             <p id="mensaje-verificacion" style="font-size: 14px; color: #666; margin-bottom: 15px;">Ingresa el código</p>
-            
             <div id="qr-section" class="qr-container">
                 <img id="imagen-qr" src="" alt="QR Code">
                 <p style="font-size: 12px; margin-top: 10px;">O ingresa esta clave manual:<br><strong id="codigo-manual"></strong></p>
             </div>
-
             <form id="formVerificar" style="margin-top: 20px;">
                 <input type="text" id="codigo2fa" class="codigo-input" maxlength="6" placeholder="000000" autocomplete="off" required>
                 <button type="submit" class="btn-principal">Verificar y Entrar</button>
             </form>
         </div>
-
     </div>
 
     <script>
-        // Memoria temporal en el navegador
         let sessionUserId = null;
         let sessionEmail = null;
         let metodoElegido = null;
 
-        // Función para cambiar entre vistas
         function mostrarVista(idVista, ocultarTabs = false) {
             document.querySelectorAll('.formulario').forEach(f => f.classList.remove('activo'));
             document.getElementById(idVista).classList.add('activo');
-            
-            if(ocultarTabs) document.getElementById('nav-tabs').style.display = 'none';
-            else document.getElementById('nav-tabs').style.display = 'flex';
+            document.getElementById('nav-tabs').style.display = ocultarTabs ? 'none' : 'flex';
         }
 
-        // Función para cambiar pestañas (Login/Registro)
         function cambiarPestaña(vista) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('activo'));
             if(vista === 'login') {
@@ -156,7 +146,8 @@
             const password = document.getElementById('reg-password').value;
 
             try {
-                const res = await fetch('http://localhost:3000/api/registro', {
+                // CORRECCIÓN: Usando ruta relativa '/api/...'
+                const res = await fetch('/api/registro', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ email, phone, password })
                 });
@@ -169,7 +160,7 @@
             } catch(e) { alert('Error conectando al servidor'); }
         });
 
-        // --- LOGIN (Paso 1) ---
+        // --- LOGIN ---
         document.getElementById('formLogin').addEventListener('submit', async (e) => {
             e.preventDefault();
             const identificador = document.getElementById('log-identificador').value;
@@ -177,7 +168,8 @@
             const esCorreo = identificador.includes('@');
 
             try {
-                const res = await fetch('http://localhost:3000/api/login', {
+                // CORRECCIÓN: Usando ruta relativa '/api/...'
+                const res = await fetch('/api/login', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         email: esCorreo ? identificador : null, 
@@ -186,9 +178,7 @@
                     })
                 });
                 const data = await res.json();
-                
                 if(res.ok) {
-                    // Guardamos datos temporales y mostramos pantalla de elección
                     sessionUserId = data.userId;
                     sessionEmail = data.email;
                     mostrarVista('vista-elegir-2fa', true);
@@ -196,20 +186,19 @@
             } catch(e) { alert('Error conectando al servidor'); }
         });
 
-        // --- SOLICITAR 2FA (Paso 2) ---
+        // --- SOLICITAR 2FA ---
         async function solicitar2FA(metodo) {
             metodoElegido = metodo;
             try {
-                const res = await fetch('http://localhost:3000/api/solicitar-2fa', {
+                // CORRECCIÓN: Usando ruta relativa '/api/...'
+                const res = await fetch('/api/solicitar-2fa', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: sessionUserId, metodo: metodo, email: sessionEmail })
+                    body: JSON.stringify({ userId: sessionUserId, metodo, email: sessionEmail })
                 });
                 const data = await res.json();
-
                 if(res.ok) {
                     mostrarVista('vista-verificar', true);
                     document.getElementById('mensaje-verificacion').innerText = data.mensaje;
-                    
                     if(metodo === 'app' && data.requiereQR) {
                         document.getElementById('qr-section').style.display = 'block';
                         document.getElementById('imagen-qr').src = data.qrUrl;
@@ -219,23 +208,22 @@
                     }
                 } else {
                     alert('Error: ' + data.error);
-                    mostrarVista('vista-elegir-2fa', true); // Lo regresamos si falla (ej. no tiene correo)
+                    mostrarVista('vista-elegir-2fa', true);
                 }
             } catch(e) { alert('Error solicitando 2FA'); }
         }
 
-        // --- VERIFICAR (Paso Final) ---
+        // --- VERIFICAR ---
         document.getElementById('formVerificar').addEventListener('submit', async (e) => {
             e.preventDefault();
             const token = document.getElementById('codigo2fa').value;
-
             try {
-                const res = await fetch('http://localhost:3000/api/verificar-2fa', {
+                // CORRECCIÓN: Usando ruta relativa '/api/...'
+                const res = await fetch('/api/verificar-2fa', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ userId: sessionUserId, token, metodo: metodoElegido })
                 });
                 const data = await res.json();
-
                 if(res.ok) {
                     document.body.innerHTML = '<div style="text-align:center; color:white; margin-top:20vh;"><h1>🔐 ¡Bienvenido, Emanuel!</h1><h2>Estás dentro del sistema seguro.</h2></div>';
                 } else alert('Error: ' + data.error);
